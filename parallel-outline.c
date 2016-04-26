@@ -80,8 +80,9 @@ int main(int argc, char* argv[]){
 	int numSynchronizations = 5;
 	int tasksPerBatch=10; 
 	int termination;
-	int terminationCount=0;
+	int terminationCount=1;
 	int lastProcessRunning;
+	int taskNum=0;
 	
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &np);
@@ -101,22 +102,24 @@ int main(int argc, char* argv[]){
 		
 		
 		for (i=0; i< numSynchronizations; i++){
+			
 			for (j=0; j< tasksPerBatch; j++ ){
-				for (p=0; p< np; p++){
-					
+			
+				for (p=1; p< np; p++){
+				
 					if (job < numJobs){
 						MPI_Send(jobQueueTest + job, 1, MPI_INT, p, p, MPI_COMM_WORLD);
 						job++;
 					}
 					else{  //jobs are done
-						
+						printf("jobs are done\n");
 						
 						if (terminationCount < np){	
 							termination = -1;
 							MPI_Send(&termination, 1, MPI_INT, p, p, MPI_COMM_WORLD);	
 							terminationCount++;
 						}
-						else{ //finished sending termination singles
+						else{ //finished sending termination signals
 							
 							j = tasksPerBatch;
 							i = numSynchronizations;
@@ -128,6 +131,11 @@ int main(int argc, char* argv[]){
 				}
 				
 			}
+			if (i == numSynchronizations -1 && terminationCount < np){ //still not done, need more synchronizations
+					
+				numSynchronizations = numSynchronizations+1;
+			}
+			
 		}
 		
 		
@@ -154,15 +162,23 @@ int main(int argc, char* argv[]){
 		
 		while (job != -1){
 		
-			for (i = 0; i< tasksPerBatch; i++){
-				
-				MPI_Recv(&job, 1, MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
-				printf("process %d received job %d\n", rank, job);
-				if (job == -1){
+			//for (i = 0; i< tasksPerBatch; i++){
+			
+			MPI_Recv(&job, 1, MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
+			
+			printf("process %d received job %d\n", rank, job);
+			if (job == -1){
 					break;
-				}
 			}
-
+			
+			
+			taskNum++;
+			if (taskNum == tasksPerBatch){
+			
+				printf("synchronize\n");
+				taskNum = 0;
+			}
+	
 		}
 		
 	
