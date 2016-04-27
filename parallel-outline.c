@@ -74,7 +74,8 @@ void initNet(){ //same technique/code as word2vec source
 
 int main(int argc, char* argv[]){
     int np, rank;
-    int i,j, p;
+	MPI_Status status;
+    int i,j, p, r;
     int numJobs = 100;
 	int job;
 	int numSynchronizations = 5;
@@ -83,6 +84,9 @@ int main(int argc, char* argv[]){
 	int terminationCount=1;
 	int lastProcessRunning;
 	int taskNum=0;
+	int jobsDone = 0; //1 if all jobs are done, 0 otherwise
+	
+	int receiveData;
 	
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &np);
@@ -110,14 +114,16 @@ int main(int argc, char* argv[]){
 					if (job < numJobs){
 						MPI_Send(jobQueueTest + job, 1, MPI_INT, p, p, MPI_COMM_WORLD);
 						job++;
+						
 					}
 					else{  //jobs are done
 						printf("jobs are done\n");
-						
+						jobsDone = 1; 
 						if (terminationCount < np){	
 							termination = -1;
 							MPI_Send(&termination, 1, MPI_INT, p, p, MPI_COMM_WORLD);	
 							terminationCount++;
+						
 						}
 						else{ //finished sending termination signals
 							
@@ -136,9 +142,18 @@ int main(int argc, char* argv[]){
 				numSynchronizations = numSynchronizations+1;
 			}
 			
+			for (r=1; r< np; r++){ //receive from processes, terminated or otherwise
+				printf("rank = %d, synchronizing\n", rank);
+				MPI_Recv(&receiveData, 1, MPI_INT, r, r, MPI_COMM_WORLD, &status);
+				printf("rank = %d, received %d\n",rank, receiveData);
+			}
 		}
 		
-		
+		for (r=1; r< np; r++){ //receive once more from all processes
+			printf("rank = %d, synchronizing once more\n", rank);
+			MPI_Recv(&receiveData, 1, MPI_INT, r, r, MPI_COMM_WORLD, &status);
+			printf("rank = %d, received final %d\n", rank, receiveData);
+		}
 	
 		free(inputToHidden);
 		free(hiddenToOutput);	
@@ -146,8 +161,8 @@ int main(int argc, char* argv[]){
     }
 	else{
 		
-		MPI_Status status;
-		printf("worker rank == %d\n", rank);
+		
+		//printf("worker rank == %d\n", rank);
 		
 		expTable = (float *)malloc((EXP_TABLE_SIZE + 1) * sizeof(float));   //same idea as original
 		for (i = 0; i < EXP_TABLE_SIZE; i++) {	
@@ -166,25 +181,32 @@ int main(int argc, char* argv[]){
 			
 			MPI_Recv(&job, 1, MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
 			
-			printf("process %d received job %d\n", rank, job);
-			if (job == -1){
-					break;
-			}
+		//	printf("process %d received job %d\n", rank, job);
 			
 			
 			taskNum++;
 			if (taskNum == tasksPerBatch){
 			
-				printf("synchronize\n");
+			//	printf("rank = %d, synchronize\n", rank);
+				int data = rank;
+				MPI_Send(&data, 1, MPI_INT, 0, rank, MPI_COMM_WORLD);
 				taskNum = 0;
+				//printf("rank = %d, done synchronizing\n", rank);
 			}
-	
+			
+			
+			if (job == -1){
+					break;
+			}
 		}
 		
-	
-	
-	
-	
+		
+		int data = rank;
+		
+		
+		printf("rank = %d, sending once more\n", rank);
+		MPI_Send(&data, 1, MPI_INT, 0, rank, MPI_COMM_WORLD);
+		printf("rank = %d, sent\n", rank);
 	
 		free(expTable);
 	}
