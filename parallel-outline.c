@@ -58,14 +58,19 @@ void initNet(){ //same technique/code as word2vec source
 	a = posix_memalign((void **)&hiddenToOutput, 128, (long long)vocab_size * layer1_size * sizeof(float));
 	
     if (hiddenToOutput == NULL) {printf("Memory allocation failed\n"); exit(1);}
-    for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++){
-		hiddenToOutput[a * layer1_size + b] = 0;
+    for (a = 0; a < vocab_size; a++){ 
+		for (b = 0; b < layer1_size; b++){
+			hiddenToOutput[a * layer1_size + b] = 0;
+		}
 	}
 	
 	
-	for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++) {
-		nextRandom = nextRandom * (unsigned long long)25214903917 + 11;
-		inputToHidden[a * layer1_size + b] = (((nextRandom & 0xFFFF) / (float)65536) - 0.5) / layer1_size;
+	for (a = 0; a < vocab_size; a++){ 
+		for (b = 0; b < layer1_size; b++){
+			//The google code I am using from dav github with Tetsuo memory patch v2 seems to use a different line here.
+			nextRandom = nextRandom * (unsigned long long)25214903917 + 11;
+			inputToHidden[a * layer1_size + b] = (((nextRandom & 0xFFFF) / (float)65536) - 0.5) / layer1_size;
+		}
 	}
 }
 
@@ -76,56 +81,78 @@ int main(int argc, char* argv[]){
     int np, rank;
 	MPI_Status status;
     int i,j, p, r;
-    int numJobs = 100;
-	int job;
+    int bufferSize = 10; //10 jobs with 1000 words each
+	int jobSize = 1000;
 	int numSynchronizations = 5;
-	int tasksPerBatch=10; 
-	int termination;
-	int terminationCount=1;
-	int lastProcessRunning;
-	int taskNum=0;
-	int jobsDone = 0; //1 if all jobs are done, 0 otherwise
-	
-	int receiveData;
+	int jobBatch=10; 
+	int receiveData = -4;
 	
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &np);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    
+	    
+	bufferSize = np - 1;
+	
     if(rank==0){
         
 		printf("master rank == %d\n", rank);
-		initNet();
-		int* jobQueueTest = (int*)malloc(numJobs*sizeof(int)); //dummy job queue
-		for (i=0; i< numJobs; i++){
-			*(jobQueueTest + i) = i;
+		int jobBuffer[bufferSize][jobSize]; //Initialize all elements to 0;
+		memset(jobBuffer, 0, bufferSize*jobSize*sizeof(int));
+		for (i=0; i< bufferSize; i++){
+			for(r=0;r<jobSize; r++){	
+				jobBuffer[i][r] = i+r;
+			}
 		}
 		
+		//produce matrices here and send out first matrix
+		initNet();
+
+			for(p=1;p<np;p++){
+				MPI_Send(&receiveData, 1, MPI_INT, p, p, MPI_COMM_WORLD);
+			}
 		for (i=0; i< numSynchronizations; i++){			
-			
+				
 			for(j=0;j<jobBatch; j++){
 				//scan jobs or start from beginning of file and scan jobs 
 				//scan jobs equal to proc - 1
 				for (p=1; p < np; p++){
-					MPI_Send(jobQueueTest + p - 1, 1, MPI_INT, p, p, MPI_COMM_WORLD);
+					//can be asynchronous
+					MPI_Send(&(jobBuffer[p-1][0]), 1000, MPI_INT, p, p, MPI_COMM_WORLD);
 				}
 			}
-			//recv matrices
-			for (r=1; r< np; r++){ //receive from processes, terminated or otherwise
+
+			//recv matrices here
+			for (r=1; r< np; r++){ 
 				printf("rank = %d, synchronizing\n", rank);
 				MPI_Recv(&receiveData, 1, MPI_INT, r, r, MPI_COMM_WORLD, &status);
 				printf("rank = %d, received %d\n",rank, receiveData);
+
+				//send out new matrices
+				MPI_Send(&receiveData, 1, MPI_INT, r, r, MPI_COMM_WORLD);
 			}
 		}			
-			//send termination
+		//send termination
+		for(p = 1; p<np;p++){
+			jobBuffer[p-1][0] = -1;
+			printf("rank = %d, synchronizing once more\n", rank);
+			MPI_Send(&(jobBuffer[p-1][0]), 1000, MPI_INT, p, p, MPI_COMM_WORLD);
+			//recieve final matrix
+			MPI_Recv(&receiveData, 1, MPI_INT, p, p, MPI_COMM_WORLD, &status);
+			printf("rank = %d, received %d\n",rank, receiveData);
+		}	
+
+
+		//output data
 		free(inputToHidden);
 		free(hiddenToOutput);	
 		
     }
 	else{
-		
+		int data;
 		
 		//printf("worker rank == %d\n", rank);
+		int workBuffer[jobSize]; //Initialize all elements to 0;
+		memset(workBuffer, 0,jobSize*sizeof(int));
 		
 		expTable = (float *)malloc((EXP_TABLE_SIZE + 1) * sizeof(float));   //same idea as original
 		for (i = 0; i < EXP_TABLE_SIZE; i++) {	
@@ -133,34 +160,37 @@ int main(int argc, char* argv[]){
 			expTable[i] = expTable[i] / (expTable[i] + 1);                   // Precompute f(x) = x / (x + 1)    (e^x)/(1+e^x)  x: -6 to 6
 		}
 	
-	
+		//Recv first matrices here
+		MPI_Recv(&data, 1, MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
+		int taskNum = 0;
+		printf("Recieved first matrix %d\n", data);
 		
+		while (1){
 		
-		job = 0;
-		
-		while (job != -1){
-		
-			//for (i = 0; i< tasksPerBatch; i++){
 			
-			MPI_Recv(&job, 1, MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
-			
-		//	printf("process %d received job %d\n", rank, job);
-			
+			MPI_Recv(workBuffer, 1000, MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
+		
+			//printf("process %d received job %d tasknum %d\n", rank, workBuffer[0], taskNum);
+		
 			//check first element for -1
-			if (job == -1){
+			if (workBuffer[0] == -1){
 					break;
 			}
 			taskNum++;
 			if (taskNum == jobBatch){
 			
-			//	printf("rank = %d, synchronize\n", rank);
-				int data = rank;
+				printf("rank = %d, synchronize\n", rank);
+				data = rank;
+
 				MPI_Send(&data, 1, MPI_INT, 0, rank, MPI_COMM_WORLD);
 				taskNum = 0;
-				//printf("rank = %d, done synchronizing\n", rank);
+
+				//Recieve new matrice
+				MPI_Recv(&data, 1,MPI_INT, 0, rank, MPI_COMM_WORLD, &status);
+				printf("rank = %d, done synchronizing\n", rank);
 			}	
 		}
-		int data = rank;
+		data = rank;
 		
 		
 		printf("rank = %d, sending once more\n", rank);

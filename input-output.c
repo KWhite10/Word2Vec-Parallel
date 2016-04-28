@@ -119,7 +119,7 @@ void learnModelInput(){
         exit(0);
     }
     vocab_size = 0;
-    while(fscanf(input, "%49[a-zA-Z']%*[^a-zA-Z']", word) == 1){
+    while(fscanf(input, "%49[a-zA-Z|']%*[^a-zA-Z|']", word) == 1){
         train_words++;
         for(i=0;word[i];i++){ //Make all the letters lowercase
             word[i] = tolower((unsigned char) word[i]);

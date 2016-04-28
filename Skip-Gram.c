@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
+#include <pthread.h>
 
 #define MAX_STRING 50
 #define EXP_TABLE_SIZE 1000
@@ -15,11 +17,17 @@ typedef struct{
     long cn;
     int* point;
     char* word;
-    char* code;
-    char* codelen;
+    char* code; //not used
+    char* codelen; // not used
 } vocabWord;
 
 char vocabFile[MAX_STRING];
+
+//for ease of access I'm making these global for now
+int np, rank;
+MPI_Status status;
+
+
 
 vocabWord* vocab;
 
@@ -30,9 +38,38 @@ float alpha = 0.025, starting_alpha, sample = 0;
 float *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
 
-int hs = 1, negative = 0;
+int hs = 0, negative = 5; //In our case we use negative
 const int table_size = 1e8;
 int *table;
+
+int VocabCompare(const void* a, const void* b){
+     return ((vocabWord *)b)->cn - ((vocabWord *)a)->cn;
+}
+
+int getWordHash(char word[]){ //used google hash method
+    unsigned int a, hash = 0;
+    for (a = 0; a < strlen(word); a++){
+        hash = hash * 257 + word[a];
+    }
+    hash = hash % hash_size;
+    return hash;
+}
+
+int searchCurrentVocab(char word[]){ //uses linear probing approach for hash table
+    unsigned int i;
+    unsigned int hash = getWordHash(word);
+    for(i = hash; 1; i = (i+1) % hash_size){
+        if(vocab_hash[i] == -1){
+            return -1;
+        }
+        if(!strcmp(word, vocab[vocab_hash[i]].word)){
+            return vocab_hash[i];
+        }
+    }
+    //shouldn't reach here ever
+    return -1;
+}
+
 
 
 int addtoCurrentVocab(char word[]){
@@ -85,126 +122,171 @@ void readVocab(){
     
     if(input == (FILE*)0){
         printf("Run input-output.c with input-file.txt first.");
-        return 0;
+        return;
     }
-    for(a=0; a<vocab_hash_size; a++){
+    for(a=0; a<hash_size; a++){
         vocab_hash[a] = -1;
     }
     vocab_size = 0;
     while (1) {
-        while(fscanf(input, "%49[a-zA-Z']%*[^a-zA-Z']", word) == 1){
+		// now it seperates ' from letters
+        while(fscanf(input, "%49[a-zA-Z|']%*[^a-zA-Z|']", word) == 1){
             train_words++;
         }
         a = addtoCurrentVocab(word);
-        fscanf(input, "%lld%c", &vocab[a].cn, &c);
+        fscanf(input, "%ld%c", &vocab[a].cn, &c);
         i++;
     }
     sortVocab();
     input = fopen("input-file.txt", "rb");
     if (input == (FILE*)0) {
-        printf("ERROR: training data file not found!\n");
+        printf("Use github to get input-file.txt!\n");
         exit(1);
     }
-    fseek(input, 0, SEEK_END);
+    fseek(input, 0, SEEK_END);//Used for pthreads
     file_size = ftell(input);
     fclose(input);
 }
 
-void CreateBinaryTree() {
-    long long a, b, i, min1i, min2i, pos1, pos2, point[MAX_CODE_LENGTH];
-    char code[MAX_CODE_LENGTH];
-    long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
-    long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
-    long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
-    for (a = 0; a < vocab_size; a++) count[a] = vocab[a].cn;
-    for (a = vocab_size; a < vocab_size * 2; a++) count[a] = 1e15;
-    pos1 = vocab_size - 1;
-    pos2 = vocab_size;
-    // Following algorithm constructs the Huffman tree by adding one node at a time
-    for (a = 0; a < vocab_size - 1; a++) {
-        // First, find two smallest nodes 'min1, min2'
-        if (pos1 >= 0) {
-            if (count[pos1] < count[pos2]) {
-                min1i = pos1;
-                pos1--;
-            } else {
-                min1i = pos2;
-                pos2++;
-            }
-        } else {
-            min1i = pos2;
-            pos2++;
-        }
-        if (pos1 >= 0) {
-            if (count[pos1] < count[pos2]) {
-                min2i = pos1;
-                pos1--;
-            } else {
-                min2i = pos2;
-                pos2++;
-            }
-        } else {
-            min2i = pos2;
-            pos2++;
-        }
-        count[vocab_size + a] = count[min1i] + count[min2i];
-        parent_node[min1i] = vocab_size + a;
-        parent_node[min2i] = vocab_size + a;
-        binary[min2i] = 1;
+void InitNet() {// google code
+    long long a, b;
+    a = posix_memalign((void **) &syn0, 128, (long long) vocab_size * layer1_size * sizeof(float));
+    if (syn0 == NULL) {
+		printf("Memory allocation failed\n"); 
+		exit(1);
+	}
+    if (hs) { //Not used
+        a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(float));
+        if (syn1 == NULL) {
+			printf("Memory allocation failed\n"); 
+			exit(1);
+		}
+        for (b = 0; b < layer1_size; b++) 
+			for (a = 0; a < vocab_size; a++)
+           		syn1[a * layer1_size + b] = 0;
     }
-    // Now assign binary code to each vocabulary word
-    for (a = 0; a < vocab_size; a++) {
-        b = a;
-        i = 0;
-        while (1) {
-            code[i] = binary[b];
-            point[i] = b;
-            i++;
-            b = parent_node[b];
-            if (b == vocab_size * 2 - 2) break;
-        }
-        vocab[a].codelen = i;
-        vocab[a].point[0] = vocab_size - 2;
-        for (b = 0; b < i; b++) {
-            vocab[a].code[i - b - 1] = code[b];
-            vocab[a].point[i - b] = point[b] - vocab_size;
-        }
+    if (negative>0) { //Used
+        a = posix_memalign((void **) &syn1neg, 128, (long long) vocab_size * layer1_size * sizeof(float));
+        if (syn1neg == NULL) {
+			printf("Memory allocation failed\n"); 
+			exit(1);
+		}
+        for (b = 0; b < layer1_size; b++) 
+			for (a = 0; a < vocab_size; a++)
+            	syn1neg[a * layer1_size + b] = 0;
     }
-    free(count);
-    free(binary);
-    free(parent_node);
+    for (b = 0; b < layer1_size; b++) 
+		for (a = 0; a < vocab_size; a++) //Code found from Dav gihub who got it from google feel free to change this two the other rand method
+        	syn0[a * layer1_size + b] = (rand() / (float)RAND_MAX - 0.5) / layer1_size;
+    //CreateBinaryTree(); Ignore for now
 }
 
-void InitNet() {
-    long long a, b;
-    a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(float));
-    if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
-    if (hs) {
-        a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(float));
-        if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
-        for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-            syn1[a * layer1_size + b] = 0;
+void InitUnigramTable() { //google code
+  int a, i;
+  long long train_words_pow = 0;
+  float d1, power = 0.75;
+  table = (int *)malloc(table_size * sizeof(int));
+  if (table == NULL) {
+    fprintf(stderr, "cannot allocate memory for the table\n");
+    exit(1);
+  }
+  for (a = 0; a < vocab_size; a++) train_words_pow += pow(vocab[a].cn, power);
+  i = 0;
+  d1 = pow(vocab[i].cn, power) / (float)train_words_pow;
+  for (a = 0; a < table_size; a++) {
+    table[a] = i;
+    if (a / (float)table_size > d1) {
+      i++;
+      d1 += pow(vocab[i].cn, power) / (float)train_words_pow;
     }
-    if (negative>0) {
-        a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(float));
-        if (syn1neg == NULL) {printf("Memory allocation failed\n"); exit(1);}
-        for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-            syn1neg[a * layer1_size + b] = 0;
-    }
-    for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-        syn0[a * layer1_size + b] = (rand() / (float)RAND_MAX - 0.5) / layer1_size;
-    CreateBinaryTree();
+    if (i >= vocab_size) i = vocab_size - 1;
+  }
 }
+
+
+//The hulk of MPI code goes here. From this function after we pass the data to
+//other processors we can have them start threads before updating the matrices.
+//For now I'll just implement MPI, but adding pthreads is a consideration.
+void trainModelParallel(){
+	long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
+  	long long word_count = 0, last_word_count = 0;
+	long long l1, l2, c, target, label;
+	unsigned long long next_random = (long long)2;
+  	float f, g;
+	FILE* fi;
+	int i,j,p,r;
+	int bufferSize = np -1; //numb processors-1 jobs with 1000 words each
+    int jobSize = 1000;
+    int numSynchronizations = 5;
+    int jobBatch=10;
+	//the parallel-outline will help fill in this part, I tested the communication and it works great
+	//Only difference is sending two matrices
+	if(rank == 0){
+		int jobBuffer[bufferSize][jobSize]; //Initialize all elements to 0;
+        memset(jobBuffer, 0, bufferSize*jobSize*sizeof(int));
+
+		//Send out the two matrices from processor 0
+			//for(p=1;p<np;p++){
+				//MPI_Send
+                //MPI_Send(&receiveData, 1, MPI_FLOAT, p, p, MPI_COMM_WORLD);
+            //}
+
+		float *neu1 = (float *)calloc(layer1_size, sizeof(float));
+  		float *neu1e = (float *)calloc(layer1_size, sizeof(float));
+  		fi = fopen("input-file.txt", "rb");
+  		if (fi == (FILE*)0) {
+    		printf("no such file \n");
+    		exit(1);
+  		}		
+		for (i=0; i< numSynchronizations; i++){
+   
+            for(j=0;j<jobBatch; j++){
+				//scan word by word until you reach 1000 words or end of file
+				//if end of file then restart at beginning of file
+				//do this for each other processor
+				for (p=1; p < np; p++){
+                    //can be asynchronous
+                    MPI_Send(&(jobBuffer[p-1][0]), 1000, MPI_INT, p, p, MPI_COMM_WORLD);
+                }
+			}	
+		}
+	}
+	else{
+		
+	}
+
+
+	if(rank == 0){
+		fclose(fi);
+	}
+
+}
+
 
 void trainSkipGram(){
-    readVocab();
-    initNet();
+	if(rank == 0){
+    	readVocab();
+    	InitNet();
+		if (negative > 0){ 
+			InitUnigramTable();
+		}
+	}
+	trainModelParallel();
+	
 }
 
 int main(int argc, char** argv){
+	int np, rank;
+	MPI_Status status;
     int i;
-    vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
-    vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
+
+	MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &np);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+
+    vocab = (vocabWord*)calloc(vocab_max_size, sizeof(vocabWord*));
+    vocab_hash = (int *)calloc(hash_size, sizeof(int));
     expTable = (float *)malloc((EXP_TABLE_SIZE + 1) * sizeof(float));
     if (expTable == NULL) {
         fprintf(stderr, "out of memory\n");
@@ -215,4 +297,6 @@ int main(int argc, char** argv){
         expTable[i] = expTable[i] / (expTable[i] + 1);                   // Precompute f(x) = x / (x + 1)
     }
     trainSkipGram();
+	MPI_Finalize(); 
+	return 0;
 }
