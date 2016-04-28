@@ -95,66 +95,29 @@ int main(int argc, char* argv[]){
     if(rank==0){
         
 		printf("master rank == %d\n", rank);
-		
 		initNet();
-		
 		int* jobQueueTest = (int*)malloc(numJobs*sizeof(int)); //dummy job queue
 		for (i=0; i< numJobs; i++){
 			*(jobQueueTest + i) = i;
 		}
-		job=0;
 		
-		
-		for (i=0; i< numSynchronizations; i++){
+		for (i=0; i< numSynchronizations; i++){			
 			
-			for (j=0; j< tasksPerBatch; j++ ){
-			
-				for (p=1; p< np; p++){
-				
-					if (job < numJobs){
-						MPI_Send(jobQueueTest + job, 1, MPI_INT, p, p, MPI_COMM_WORLD);
-						job++;
-						
-					}
-					else{  //jobs are done
-						printf("jobs are done\n");
-						jobsDone = 1; 
-						if (terminationCount < np){	
-							termination = -1;
-							MPI_Send(&termination, 1, MPI_INT, p, p, MPI_COMM_WORLD);	
-							terminationCount++;
-						
-						}
-						else{ //finished sending termination signals
-							
-							j = tasksPerBatch;
-							i = numSynchronizations;
-							break;
-						
-						}
-						
-					}
+			for(j=0;j<jobBatch; j++){
+				//scan jobs or start from beginning of file and scan jobs 
+				//scan jobs equal to proc - 1
+				for (p=1; p < np; p++){
+					MPI_Send(jobQueueTest + p - 1, 1, MPI_INT, p, p, MPI_COMM_WORLD);
 				}
-				
 			}
-			if (i == numSynchronizations -1 && terminationCount < np){ //still not done, need more synchronizations
-					
-				numSynchronizations = numSynchronizations+1;
-			}
-			
+			//recv matrices
 			for (r=1; r< np; r++){ //receive from processes, terminated or otherwise
 				printf("rank = %d, synchronizing\n", rank);
 				MPI_Recv(&receiveData, 1, MPI_INT, r, r, MPI_COMM_WORLD, &status);
 				printf("rank = %d, received %d\n",rank, receiveData);
 			}
-		}
-		
-		for (r=1; r< np; r++){ //receive once more from all processes
-			printf("rank = %d, synchronizing once more\n", rank);
-			MPI_Recv(&receiveData, 1, MPI_INT, r, r, MPI_COMM_WORLD, &status);
-			printf("rank = %d, received final %d\n", rank, receiveData);
-		}
-	
+		}			
+			//send termination
 		free(inputToHidden);
 		free(hiddenToOutput);	
 		
@@ -183,24 +146,20 @@ int main(int argc, char* argv[]){
 			
 		//	printf("process %d received job %d\n", rank, job);
 			
-			
+			//check first element for -1
+			if (job == -1){
+					break;
+			}
 			taskNum++;
-			if (taskNum == tasksPerBatch){
+			if (taskNum == jobBatch){
 			
 			//	printf("rank = %d, synchronize\n", rank);
 				int data = rank;
 				MPI_Send(&data, 1, MPI_INT, 0, rank, MPI_COMM_WORLD);
 				taskNum = 0;
 				//printf("rank = %d, done synchronizing\n", rank);
-			}
-			
-			
-			if (job == -1){
-					break;
-			}
+			}	
 		}
-		
-		
 		int data = rank;
 		
 		
