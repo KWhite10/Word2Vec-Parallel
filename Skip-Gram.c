@@ -204,10 +204,125 @@ void InitUnigramTable() { //google code
 }
 
 
+void CBOW(long long *sentence){  //reworded/slightly rewritten from google code. Just pass sentence array of numbers
+	float *h = (float *)calloc(layer1_size, sizeof(float));
+	float *hE = (float *)calloc(layer1_size, sizeof(float));		
+	int label, d, c, cw, target, sampleOffset;
+	float f, g;
+	unsigned long long next_random = 1;
+	float alpha = 0.05;
+	int sentLength = MAX_SENTENCE_LENGTH;	
+	float error;
+	float totalError = 0;
+	
+	int i;
+	for (i=0; i< sentLength; i++){
+		
+		long long wordId = sentence[i];
+		
+		if (wordId == -1){
+			continue;
+		}
+		
+		int range = window/2;
+		cw = 0;
+		int j;
+		//for each context
+		for (j=i-range; j<= i+range; j++){
+		
+			if (j < 0 || j>= sentLength){ //skip elements in window outside sentence
+				continue;
+			}
+			for (c = 0; c < layer1_size; c++){ 
+				h[c] += inputToHidden[c + wordId* layer1_size]; //x*w_input = h
+				
+			}	
+				
+			cw++;
+		}
+		if (cw){
+			for (c = 0; c < layer1_size; c++){
+				h[c] /= cw;  // h/C
+			
+			}
+			for (d = 0; d < negative + 1; d++) {
+				
+				if (d == 0) {
+					target = wordId;
+					label = 1;
+				}else {
+					next_random = next_random * (unsigned long long)25214903917 + 11;
+					target = table[(next_random >> 16) % table_size];
+					if (target == 0) target = next_random % (vocab_size - 1) + 1;
+					if (target == wordId) continue;
+					label = 0;
+				}
+				sampleOffset = target * layer1_size;
+			
+				f = 0;
+			
+				for (c = 0; c < layer1_size; c++){
+				
+					f += h[c]*hiddenToOutput[c + sampleOffset];
+				
+				}
+				error = 0;
+				if (f > MAX_EXP){ 
+					error = label -1;
+					g = (error) * alpha;
+					totalError = totalError + abs(error);
+				}
+				else if (f < -MAX_EXP){ 
+					error = label -0;
+					g = (error) * alpha;
+					totalError = totalError + abs(error);
+				}
+				else{
+					error = label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+					g = (error) * alpha;  //<0 if negative, >0 if positive (-1,1)
+					totalError = totalError + error;
+				}		
+				for (c = 0; c < layer1_size; c++){
+				
+					hE[c] += g * hiddenToOutput[c + sampleOffset];
+				
+				}
+				for (c = 0; c < layer1_size; c++){
+				
+					hiddenToOutput[c + sampleOffset] += g * h[c];
+				
+				}
+			}
+			printf("error = %f\n", totalError); //total loss per update. Could keep accumulating until end of sentence 
+			totalError = 0;
+			
+			for (j=i-range; j<= i+range; j++){
+		
+				if (j < 0 || j>= sentLength){ //skip elements in window outside sentence
+					continue;
+				}
+				long long contextWordId = *(sentence + j);  //each context word
+				if (contextWordId == -1) continue;
+				
+				for (c = 0; c < layer1_size; c++) {
+				
+					inputToHidden[c + contextWordId * layer1_size] += hE[c];
+				
+				}
+			}
+		}
+	}
+	free(h);
+	free(hE);
+}
+
+
+
+
 //The hulk of MPI code goes here. From this function after we pass the data to
 //other processors we can have them start threads before updating the matrices.
 //For now I'll just implement MPI, but adding pthreads is a consideration.
-void trainModelParallel(){
+void trainModelParallelSkipGram(){
 	long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
   	long long word_count = 0, last_word_count = 0;
 	long long l1, l2, c, target, label;
@@ -263,6 +378,71 @@ void trainModelParallel(){
 }
 
 
+
+
+//The hulk of MPI code goes here. From this function after we pass the data to
+//other processors we can have them start threads before updating the matrices.
+//For now I'll just implement MPI, but adding pthreads is a consideration.
+void trainModelParallelCBOW(){
+	long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
+  	long long word_count = 0, last_word_count = 0;
+	long long l1, l2, c, target, label;
+	unsigned long long next_random = (long long)2;
+  	float f, g;
+	FILE* fi;
+	int i,j,p,r;
+	int bufferSize = np -1; //numb processors-1 jobs with 1000 words each
+    int jobSize = 1000;
+    int numSynchronizations = 5;
+    int jobBatch=10;
+	//the parallel-outline will help fill in this part, I tested the communication and it works great
+	//Only difference is sending two matrices
+	if(rank == 0){
+		int jobBuffer[bufferSize][jobSize]; //Initialize all elements to 0;
+        memset(jobBuffer, 0, bufferSize*jobSize*sizeof(int));
+
+		//Send out the two matrices from processor 0
+			//for(p=1;p<np;p++){
+				//MPI_Send
+                //MPI_Send(&receiveData, 1, MPI_FLOAT, p, p, MPI_COMM_WORLD);
+            //}
+
+		
+  		fi = fopen("input-file.txt", "rb");
+  		if (fi == (FILE*)0) {
+    		printf("no such file \n");
+    		exit(1);
+  		}		
+		for (i=0; i< numSynchronizations; i++){
+   
+            for(j=0;j<jobBatch; j++){
+				//scan word by word until you reach 1000 words or end of file
+				//if end of file then restart at beginning of file
+				//do this for each other processor
+				for (p=1; p < np; p++){
+                    //can be asynchronous
+                    MPI_Send(&(jobBuffer[p-1][0]), 1000, MPI_INT, p, p, MPI_COMM_WORLD);
+                }
+			}	
+		}
+	}
+	else{
+		//add parallel-outline related code
+		//call CBOW with received array of words in sentence (array of longs)
+		
+	}
+
+
+	if(rank == 0){
+		fclose(fi);
+	}
+
+}
+
+
+
+
+
 void trainSkipGram(){
 	if(rank == 0){
     	readVocab();
@@ -274,6 +454,20 @@ void trainSkipGram(){
 	trainModelParallel();
 	
 }
+
+void trainCBOW(){
+	if(rank == 0){
+    	readVocab();
+    	InitNet();
+		if (negative > 0){ 
+			InitUnigramTable();
+		}
+	}
+	trainModelParallel();
+	
+}
+
+
 
 int main(int argc, char** argv){
 	int np, rank;
