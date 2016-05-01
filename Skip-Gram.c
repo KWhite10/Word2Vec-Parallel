@@ -265,7 +265,7 @@ void SkipGram(long long* sentence){
     	        else{
        				error = label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
             	    g = (error) * alpha;  //<0 if negative, >0 if positive (-1,1)
-              	    totalError = totalError + error;
+              	    totalError = totalError + fabs(error);
                	}
 				for (c = 0; c < layer1_size; c++) hE[c] += g * syn1neg[c + sampleOffset];
           		for (c = 0; c < layer1_size; c++) syn1neg[c + sampleOffset] += g * syn0[c + wordId*layer1_size];
@@ -308,8 +308,12 @@ void CBOW(long long *sentence){  //reworded/slightly rewritten from google code.
 			if (j < 0 || j>= sentLength){ //skip elements in window outside sentence
 				continue;
 			}
+			
+			long long contextWordId = *(sentence + j);  //each context word
+			if (contextWordId == -1) continue;
+			
 			for (c = 0; c < layer1_size; c++){ 
-				h[c] += inputToHidden[c + wordId* layer1_size]; //x*w_input = h
+				h[c] += inputToHidden[c + contextWordId* layer1_size]; //x*w_input = h
 				
 			}	
 				
@@ -355,7 +359,7 @@ void CBOW(long long *sentence){  //reworded/slightly rewritten from google code.
 				else{
 					error = label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
 					g = (error) * alpha;  //<0 if negative, >0 if positive (-1,1)
-					totalError = totalError + error;
+					totalError = totalError + fabs(error);
 				}		
 				for (c = 0; c < layer1_size; c++){
 				
@@ -368,8 +372,7 @@ void CBOW(long long *sentence){  //reworded/slightly rewritten from google code.
 				
 				}
 			}
-			printf("error = %f\n", totalError); //total loss per update. Could keep accumulating until end of sentence 
-			totalError = 0;
+			
 			
 			for (j=i-range; j<= i+range; j++){
 		
@@ -387,6 +390,10 @@ void CBOW(long long *sentence){  //reworded/slightly rewritten from google code.
 			}
 		}
 	}
+	
+	printf("error = %f\n", totalError); //total loss per update. Could keep accumulating until end of sentence 
+	
+	
 	free(h);
 	free(hE);
 }
