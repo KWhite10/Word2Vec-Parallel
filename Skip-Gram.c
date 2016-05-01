@@ -204,6 +204,82 @@ void InitUnigramTable() { //google code
 }
 
 
+void SkipGram(long long* sentence){
+	float *h = (float *)calloc(layer1_size, sizeof(float));
+	float *hE = (float *)calloc(layer1_size, sizeof(float));		
+	int label, d, c, cw, target, sampleOffset;
+	float f, g;
+	unsigned long long next_random = 1;
+	float alpha = 0.05;
+	int sentLength = MAX_SENTENCE_LENGTH;
+	float error;
+	float totalError = 0;
+	long long wordId;
+
+	int i, j;
+	for(i=0;i<sentLength;i++){
+		wordId = sentence[i];
+		if(wordId == -1){
+			continue;
+		}
+		for (c = 0; c < layer1_size; c++) h[c] = 0;
+    	for (c = 0; c < layer1_size; c++) hE[c] = 0;
+		int range = window / 2;
+	
+		for (j=i-range; j<= i+range; j++){
+
+            if (j < 0 || j>= sentLength || j == i){ //skip elements in window outside sentence
+                continue;
+			}
+			for (c = 0; c < layer1_size; c++){
+                h[c] += 0;
+            }
+			for (d = 0; d < negative + 1; d++) {
+          		if (d == 0) {
+					target = wordId;
+					label = 1;
+				}
+				else{
+					next_random = next_random * (unsigned long long)25214903917 + 11;
+           			target = table[(next_random >> 16) % table_size];//unigram table
+           			if (target == 0) target = next_random % (vocab_size - 1) + 1;
+           			if (target == wordId) continue;
+           			label = 0;
+				}
+				sampleOffset = target * layer1_size;
+				f = 0;
+				for (c = 0; c < layer1_size; c++){ 
+					f += syn0[c + wordId*layer1_size] * syn1neg[c + sampleOffset];
+				}
+				error = 0;
+	            if (f > MAX_EXP){
+    	            error = label -1;
+        	        g = (error) * alpha;
+            	    totalError = totalError + fabs(error);
+                }
+           	    else if (f < -MAX_EXP){ 
+            	    error = label -0;
+            	    g = (error) * alpha;
+           	        totalError = totalError + fabs(error);
+	           	}
+    	        else{
+       				error = label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+            	    g = (error) * alpha;  //<0 if negative, >0 if positive (-1,1)
+              	    totalError = totalError + error;
+               	}
+				for (c = 0; c < layer1_size; c++) hE[c] += g * syn1neg[c + sampleOffset];
+          		for (c = 0; c < layer1_size; c++) syn1neg[c + sampleOffset] += g * syn0[c + wordId*layer1_size];
+			}
+			for (c = 0; c < layer1_size; c++) syn0[c + wordId * layer1_size] += hE[c];
+			// place error here for each word update error
+		}
+		//place error here for each window update error
+	}
+	//here for each sentence.
+	printf("error = %f\n", totalError); //total loss per update. Could keep accumulating until end of sentence 
+}
+
+
 void CBOW(long long *sentence){  //reworded/slightly rewritten from google code. Just pass sentence array of numbers
 	float *h = (float *)calloc(layer1_size, sizeof(float));
 	float *hE = (float *)calloc(layer1_size, sizeof(float));		
@@ -219,7 +295,6 @@ void CBOW(long long *sentence){  //reworded/slightly rewritten from google code.
 	for (i=0; i< sentLength; i++){
 		
 		long long wordId = sentence[i];
-		
 		if (wordId == -1){
 			continue;
 		}
@@ -270,12 +345,12 @@ void CBOW(long long *sentence){  //reworded/slightly rewritten from google code.
 				if (f > MAX_EXP){ 
 					error = label -1;
 					g = (error) * alpha;
-					totalError = totalError + abs(error);
+					totalError = totalError + fabs(error);
 				}
 				else if (f < -MAX_EXP){ 
 					error = label -0;
 					g = (error) * alpha;
-					totalError = totalError + abs(error);
+					totalError = totalError + fabs(error);
 				}
 				else{
 					error = label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
@@ -451,7 +526,7 @@ void trainSkipGram(){
 			InitUnigramTable();
 		}
 	}
-	trainModelParallel();
+	trainModelParallelSkipGram();
 	
 }
 
@@ -463,7 +538,7 @@ void trainCBOW(){
 			InitUnigramTable();
 		}
 	}
-	trainModelParallel();
+	trainModelParallelCBOW();
 	
 }
 
