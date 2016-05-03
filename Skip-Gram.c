@@ -231,6 +231,10 @@ void SkipGram(long long* sentence){
             if (j < 0 || j>= sentLength || j == i){ //skip elements in window outside sentence
                 continue;
 			}
+			long long contextWordId = *(sentence + j);  //each context word
+			if (contextWordId == -1) continue;
+			
+			
 			for (c = 0; c < layer1_size; c++){
                 h[c] += 0;
             }
@@ -249,7 +253,7 @@ void SkipGram(long long* sentence){
 				sampleOffset = target * layer1_size;
 				f = 0;
 				for (c = 0; c < layer1_size; c++){ 
-					f += syn0[c + wordId*layer1_size] * syn1neg[c + sampleOffset];
+					f += syn0[c + contextWordId*layer1_size] * syn1neg[c + sampleOffset];
 				}
 				error = 0;
 	            if (f > MAX_EXP){
@@ -268,9 +272,9 @@ void SkipGram(long long* sentence){
               	    totalError = totalError + fabs(error);
                	}
 				for (c = 0; c < layer1_size; c++) hE[c] += g * syn1neg[c + sampleOffset];
-          		for (c = 0; c < layer1_size; c++) syn1neg[c + sampleOffset] += g * syn0[c + wordId*layer1_size];
+          		for (c = 0; c < layer1_size; c++) syn1neg[c + sampleOffset] += g * syn0[c + contextWordId*layer1_size];
 			}
-			for (c = 0; c < layer1_size; c++) syn0[c + wordId * layer1_size] += hE[c];
+			for (c = 0; c < layer1_size; c++) syn0[c + contextWordId * layer1_size] += hE[c];
 			// place error here for each word update error
 		}
 		//place error here for each window update error
